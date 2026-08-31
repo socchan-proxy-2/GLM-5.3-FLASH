@@ -1,5 +1,5 @@
 """
-Replicate Cog predictor for GLM-5.3-Flash (UD-TQ1_0 GGUF, ~93GB, baked into
+Replicate Cog predictor for GLM-5.3-Flash (UD-IQ1_M GGUF, ~93GB, baked into
 the image at build time) via llama.cpp's llama-server, on 2x A100 80GB
 (160GB VRAM total).
 
@@ -9,7 +9,7 @@ IMPORTANT CAVEATS (read before trusting this in production):
   upstream PRs (#27752, #27754) are unmerged as of this writing.
 - No one has published A100 (Ampere, sm_80) benchmarks for this model yet.
   H100/H200/B200/GB300 are the only hardware with published numbers.
-- UD-TQ1_0 (1-bit dynamic quant) retains ~71% of top-1 accuracy vs BF16 per
+- UD-IQ1_M (1-bit dynamic quant) retains ~71% of top-1 accuracy vs BF16 per
   Unsloth's own measurements - a real, noticeable quality drop, traded for
   fitting comfortably in 160GB VRAM with room to spare and no per-cold-start
   download (weights are baked into the image, see cog.yaml).
@@ -32,7 +32,7 @@ from cog import BasePredictor, Input
 
 LLAMA_SERVER_BIN = "/src/bin/llama-server"
 MODEL_DIR = "/src/model"  # baked into the image at build time - see cog.yaml
-MODEL_GLOB_HINT = "UD-TQ1_0"  # actual filename(s) live under MODEL_DIR; ~93GB, ~71% top-1 accuracy retained
+MODEL_GLOB_HINT = "UD-IQ1_M"  # actual filename(s) live under MODEL_DIR; (exact size/accuracy per Unsloth model card)
 SERVER_HOST = "127.0.0.1"
 SERVER_PORT = 8080
 N_GPU_LAYERS = 999  # push everything onto GPU; llama.cpp will cap at what fits
@@ -40,7 +40,7 @@ CTX_SIZE = 32768    # start conservative; GLM-5.3-Flash supports up to 1,048,576
 
 
 def _find_gguf_first_shard(model_dir: str) -> str:
-    """UD-TQ1_0 ships as split GGUF shards; llama.cpp wants the first one."""
+    """UD-IQ1_M ships as split GGUF shards; llama.cpp wants the first one."""
     candidates = []
     for root, _, files in os.walk(model_dir):
         for f in files:
