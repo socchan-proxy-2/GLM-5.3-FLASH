@@ -22,14 +22,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # This action cleans up disk space to make more room for your
-      # model code, weights, etc.
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@v1.3.1
-        with:
-          tool-cache: false
-          docker-images: false
-
       - name: Checkout
         uses: actions/checkout@v4
 
