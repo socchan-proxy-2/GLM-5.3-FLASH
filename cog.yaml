@@ -29,18 +29,19 @@ build:
       https://github.com/unslothai/llama.cpp/releases/download/b10715-mix-86bd2d3/app-b10715-mix-86bd2d3-linux-x64-cuda12-older.tar.gz
       | tar -xz -C /src/bin
     - "chmod +x /src/bin/llama-server /src/bin/llama-cli"
-    # Bake the 1-bit dynamic quant (UD-TQ1_0, ~93GB) into the image itself.
-    # NOTE: ~71% top-1 accuracy retained vs BF16 per Unsloth's own numbers -
-    # a real, noticeable quality drop from the 3-bit version (~82%), traded
-    # for smaller image size and no per-cold-start download.
-    # ALSO NOTE: field reports on the upstream PR (ggml-org#27752) say the
-    # 1-bit tier (UD-IQ1_M) produced repeated-token garbage on this
-    # architecture during testing - the 1-bit tier may simply not work well
-    # for glm5next regardless of quant variant. Watch output quality closely
-    # and be ready to fall back to 3-bit (UD-IQ3_XXS, ~120GB) if so.
+    # Bake the 1-bit dynamic quant (UD-IQ1_M) into the image itself.
+    # NOTE: the originally-referenced "UD-TQ1_0" filename does not exist in
+    # this repo - actual available 1-bit tier is UD-IQ1_M (S/M size variants
+    # present under the repo tree). Confirm exact size/accuracy tradeoff
+    # against the model card before relying on these numbers.
+    # ALSO NOTE: field reports on the upstream PR (ggml-org#27752) say
+    # UD-IQ1_M produced repeated-token garbage on this architecture during
+    # testing - the 1-bit tier may simply not work well for glm5next
+    # regardless of variant. Watch output quality closely and be ready to
+    # fall back to 3-bit (UD-IQ3_XXS, ~120GB) if so.
     - >
       python3 -c "from huggingface_hub import snapshot_download;
       snapshot_download(repo_id='unsloth/GLM-5.3-Flash-GGUF',
-      local_dir='/src/model', allow_patterns=['*UD-TQ1_0*'])"
+      local_dir='/src/model', allow_patterns=['*UD-IQ1_M*'])"
 
 predict: "predict.py:Predictor"
