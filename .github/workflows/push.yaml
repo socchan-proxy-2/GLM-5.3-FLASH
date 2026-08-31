@@ -27,6 +27,8 @@ jobs:
         with:
           tool-cache: false
           docker-images: false
+      - name: Checkout
+        uses: actions/checkout@v4
 
       # This action installs Docker buildx and Cog (and optionally CUDA)
       - name: Setup Cog
