@@ -12,57 +12,35 @@ build:
   # var (not settable in cog.yaml) - set it in the Replicate dashboard
   # under deployment environment variables if needed, e.g. 10800 (3 hours).
   system_packages:
-    - "git"
-    - "cmake"
-    - "ninja-build"
-    - "clang"
-    - "mold"
-    - "build-essential"
-    - "pciutils"
     - "curl"
-    - "libcurl4-openssl-dev"
+    - "pciutils"
   python_packages:
-    - "huggingface_hub[cli]==0.25.2"
-    - "requests==2.32.3"
+    - "huggingface_hub==0.25.2"
   run:
-    # Unsloth's glm5next-support fork of llama.cpp — mainline has no glm5_next
-    # architecture support yet (as of 2026-08-26, PRs #27752/#27754 unmerged).
-    # NOTE: the model weights (~120GB, UD-IQ3_XXS) are deliberately NOT
-    # downloaded here at build time — they're pulled inside setup() instead,
-    # so the local `cog build`/`cog push` on your machine stays lightweight
-    # (just the llama.cpp compile, no 120GB disk requirement locally).
-    # Tradeoff: every cold start on Replicate re-downloads ~120GB, adding
-    # several minutes to cold boot. This download time should fall under
-    # Replicate's free "setup" phase for public models (not billed), but
-    # confirm this in your dashboard after a real run.
-    - "git clone --branch glm5next/upstream https://github.com/unslothai/llama.cpp /src/llama.cpp"
-    # Building for every CUDA arch (Ampere/Hopper/Blackwell/etc) at once is
-    # what blows up disk usage during compilation — each arch gets its own
-    # copy of every kernel. Restrict to A100 only (sm_80).
-    # Also: Ninja (not Make) for faster/leaner parallel builds, and mold
-    # (not GNU ld) for much faster, lower-overhead linking of the large
-    # CUDA object files.
+    # Use Unsloth's prebuilt llama.cpp binaries instead of compiling from
+    # source - this specific release (b10715-mix-86bd2d3) has GLM-5-Next
+    # (GLM-5.3-Flash) support merged in (ggml-org#27754), so no more ~20min
+    # from-scratch CUDA compile.
+    # "cuda12-older" variant covers sm 70-89, which includes A100 (sm_80).
+    # See: https://github.com/unslothai/llama.cpp/releases/tag/b10715-mix-86bd2d3
     - >
-      cmake /src/llama.cpp -B /src/llama.cpp/build -G Ninja
-      -DBUILD_SHARED_LIBS=OFF -DGGML_CUDA=ON
-      -DCMAKE_CUDA_ARCHITECTURES=80
-      -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=mold"
-      -DCMAKE_SHARED_LINKER_FLAGS="-fuse-ld=mold"
-    - >
-      cmake --build /src/llama.cpp/build --config Release
-      --target llama-cli llama-mtmd-cli llama-server llama-gguf-split
-    - "mkdir -p /src/bin && cp /src/llama.cpp/build/bin/llama-* /src/bin/"
-    # Free the intermediate object files / CUDA fatbins now that the
-    # binaries are built and copied out - these are what ate the disk.
-    - "rm -rf /src/llama.cpp/build/CMakeFiles /src/llama.cpp/.git"
+      mkdir -p /src/bin &&
+      curl -sL
+      https://github.com/unslothai/llama.cpp/releases/download/b10715-mix-86bd2d3/app-b10715-mix-86bd2d3-linux-x64-cuda12-older.tar.gz
+      | tar -xz -C /src/bin
+    - "chmod +x /src/bin/llama-server /src/bin/llama-cli"
     # Bake the 1-bit dynamic quant (UD-TQ1_0, ~93GB) into the image itself.
     # NOTE: ~71% top-1 accuracy retained vs BF16 per Unsloth's own numbers -
     # a real, noticeable quality drop from the 3-bit version (~82%), traded
     # for smaller image size and no per-cold-start download.
+    # ALSO NOTE: field reports on the upstream PR (ggml-org#27752) say the
+    # 1-bit tier (UD-IQ1_M) produced repeated-token garbage on this
+    # architecture during testing - the 1-bit tier may simply not work well
+    # for glm5next regardless of quant variant. Watch output quality closely
+    # and be ready to fall back to 3-bit (UD-IQ3_XXS, ~120GB) if so.
     - >
-      python3 -m pip install --no-cache-dir "huggingface_hub[cli]==0.25.2"
-      && hf download unsloth/GLM-5.3-Flash-GGUF
-      --local-dir /src/model
-      --include "*UD-TQ1_0*"
+      python3 -c "from huggingface_hub import snapshot_download;
+      snapshot_download(repo_id='unsloth/GLM-5.3-Flash-GGUF',
+      local_dir='/src/model', allow_patterns=['*UD-TQ1_0*'])"
 
 predict: "predict.py:Predictor"
