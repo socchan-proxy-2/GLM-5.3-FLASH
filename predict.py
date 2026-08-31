@@ -1,6 +1,7 @@
 """
-Replicate Cog predictor for GLM-5.3-Flash (UD-IQ3_XXS GGUF, ~120GB) via
-llama.cpp's llama-server, on 2x A100 80GB (160GB VRAM total).
+Replicate Cog predictor for GLM-5.3-Flash (UD-TQ1_0 GGUF, ~93GB, baked into
+the image at build time) via llama.cpp's llama-server, on 2x A100 80GB
+(160GB VRAM total).
 
 IMPORTANT CAVEATS (read before trusting this in production):
 - glm5_next is a brand-new architecture (2026-08-26). This uses Unsloth's
@@ -8,54 +9,38 @@ IMPORTANT CAVEATS (read before trusting this in production):
   upstream PRs (#27752, #27754) are unmerged as of this writing.
 - No one has published A100 (Ampere, sm_80) benchmarks for this model yet.
   H100/H200/B200/GB300 are the only hardware with published numbers.
-  Loading may simply work (CUDA is CUDA), but treat first-run behavior as
-  unverified territory - watch VRAM usage and generation quality closely.
-- UD-IQ3_XXS retains ~82% of top-1 accuracy vs BF16 per Unsloth's own
-  measurements - a real quality tradeoff, not just a memory one.
+- UD-TQ1_0 (1-bit dynamic quant) retains ~71% of top-1 accuracy vs BF16 per
+  Unsloth's own measurements - a real, noticeable quality drop, traded for
+  fitting comfortably in 160GB VRAM with room to spare and no per-cold-start
+  download (weights are baked into the image, see cog.yaml).
 - --jinja is required for GLM-5.3-Flash's chat template to apply correctly.
+- --parallel 1 --no-kv-unified works around a known crash: GLM-5.3-Flash's
+  pooled indexer cache is incompatible with unified KV cache + >1 parallel
+  sequence (see https://huggingface.co/unsloth/GLM-5.3-Flash-GGUF/discussions/1).
+  Omitting this causes an immediate startup crash with no clean error
+  message - this was very likely the root cause of earlier
+  "RemoteProtocolError: peer closed connection ... setup failed" errors.
 """
 
 import os
 import subprocess
 import time
 import atexit
-from typing import Optional
 
 import requests
-from huggingface_hub import snapshot_download
 from cog import BasePredictor, Input
 
 LLAMA_SERVER_BIN = "/src/bin/llama-server"
-MODEL_DIR = "/src/model"
-HF_REPO = "unsloth/GLM-5.3-Flash-GGUF"
-MODEL_GLOB_HINT = "UD-IQ3_XXS"  # actual filename(s) live under MODEL_DIR; ~120GB, ~82% top-1 accuracy retained
+MODEL_DIR = "/src/model"  # baked into the image at build time - see cog.yaml
+MODEL_GLOB_HINT = "UD-TQ1_0"  # actual filename(s) live under MODEL_DIR; ~93GB, ~71% top-1 accuracy retained
 SERVER_HOST = "127.0.0.1"
 SERVER_PORT = 8080
 N_GPU_LAYERS = 999  # push everything onto GPU; llama.cpp will cap at what fits
 CTX_SIZE = 32768    # start conservative; GLM-5.3-Flash supports up to 1,048,576
 
 
-def _ensure_model_downloaded(repo_id: str, local_dir: str, glob_hint: str):
-    """
-    Downloads the quantized GGUF from Hugging Face at setup() time rather than
-    build time. This keeps local `cog build` lightweight (no ~120GB needed on
-    the machine running `cog push`), at the cost of every cold start on
-    Replicate re-downloading ~120GB before it can serve a request.
-    """
-    if os.path.isdir(local_dir) and any(
-        glob_hint in f for _, _, files in os.walk(local_dir) for f in files
-    ):
-        return  # already present (e.g. warm container reusing disk)
-    os.makedirs(local_dir, exist_ok=True)
-    snapshot_download(
-        repo_id=repo_id,
-        local_dir=local_dir,
-        allow_patterns=[f"*{glob_hint}*"],
-    )
-
-
 def _find_gguf_first_shard(model_dir: str) -> str:
-    """UD-IQ3_XXS ships as split GGUF shards; llama.cpp wants the first one."""
+    """UD-TQ1_0 ships as split GGUF shards; llama.cpp wants the first one."""
     candidates = []
     for root, _, files in os.walk(model_dir):
         for f in files:
@@ -77,7 +62,6 @@ def _find_gguf_first_shard(model_dir: str) -> str:
 
 class Predictor(BasePredictor):
     def setup(self):
-        _ensure_model_downloaded(HF_REPO, MODEL_DIR, MODEL_GLOB_HINT)
         model_path = _find_gguf_first_shard(MODEL_DIR)
 
         cmd = [
@@ -89,13 +73,18 @@ class Predictor(BasePredictor):
             "--ctx-size", str(CTX_SIZE),
             "--jinja",  # required: applies the GLM-5.3-Flash chat template
             "--flash-attn",
+            "--parallel", "1",
+            "--no-kv-unified",
         ]
 
         self.server_proc = subprocess.Popen(cmd)
         atexit.register(self._shutdown)
 
         base_url = f"http://{SERVER_HOST}:{SERVER_PORT}"
-        self._wait_for_server(base_url, timeout_s=10800)  # ~120GB download + load from scratch each cold start (180 min)
+        # Weights are already on local disk (baked into image), so this
+        # should mostly be model-load time, not download time. Still generous
+        # since it's a ~93GB load from disk into GPU/CPU memory.
+        self._wait_for_server(base_url, timeout_s=3600)  # 60 min
         self.base_url = base_url
 
     def _wait_for_server(self, base_url: str, timeout_s: int):
@@ -104,8 +93,9 @@ class Predictor(BasePredictor):
             if self.server_proc.poll() is not None:
                 raise RuntimeError(
                     f"llama-server exited early with code {self.server_proc.returncode}. "
-                    "Check build logs - this is often a CUDA/kernel incompatibility "
-                    "on unverified hardware like A100."
+                    "Check logs - this is often a CUDA/kernel incompatibility "
+                    "on unverified hardware like A100, or a missing --no-kv-unified "
+                    "type flag mismatch."
                 )
             try:
                 r = requests.get(f"{base_url}/health", timeout=5)
@@ -151,4 +141,3 @@ class Predictor(BasePredictor):
         resp.raise_for_status()
         data = resp.json()
         return data["choices"][0]["message"]["content"]
-
