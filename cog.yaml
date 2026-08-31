@@ -1,11 +1,13 @@
 build:
   gpu: true
   cuda: "12.4"
-  cudnn: "9"
   python_version: "3.11"
   system_packages:
     - "git"
     - "cmake"
+    - "ninja-build"
+    - "clang"
+    - "mold"
     - "build-essential"
     - "pciutils"
     - "curl"
@@ -25,13 +27,25 @@ build:
     # Replicate's free "setup" phase for public models (not billed), but
     # confirm this in your dashboard after a real run.
     - "git clone --branch glm5next/upstream https://github.com/unslothai/llama.cpp /src/llama.cpp"
+    # Building for every CUDA arch (Ampere/Hopper/Blackwell/etc) at once is
+    # what blows up disk usage during compilation — each arch gets its own
+    # copy of every kernel. Restrict to A100 only (sm_80).
+    # Also: Ninja (not Make) for faster/leaner parallel builds, and mold
+    # (not GNU ld) for much faster, lower-overhead linking of the large
+    # CUDA object files.
     - >
-      cmake /src/llama.cpp -B /src/llama.cpp/build
+      cmake /src/llama.cpp -B /src/llama.cpp/build -G Ninja
       -DBUILD_SHARED_LIBS=OFF -DGGML_CUDA=ON
+      -DCMAKE_CUDA_ARCHITECTURES=80
+      -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=mold"
+      -DCMAKE_SHARED_LINKER_FLAGS="-fuse-ld=mold"
     - >
-      cmake --build /src/llama.cpp/build --config Release -j
+      cmake --build /src/llama.cpp/build --config Release
       --target llama-cli llama-mtmd-cli llama-server llama-gguf-split
     - "mkdir -p /src/bin && cp /src/llama.cpp/build/bin/llama-* /src/bin/"
+    # Free the intermediate object files / CUDA fatbins now that the
+    # binaries are built and copied out - these are what ate the disk.
+    - "rm -rf /src/llama.cpp/build/CMakeFiles /src/llama.cpp/.git"
 
 predict: "predict.py:Predictor"
 
