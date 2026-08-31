@@ -2,6 +2,15 @@ build:
   gpu: true
   cuda: "12.4"
   python_version: "3.11"
+  # NOTE ON COLD START TIMEOUT:
+  # Baking the model into the image (vs downloading in setup()) means cold
+  # start no longer depends on a fresh ~93GB download, just image pull +
+  # load. Still, loading ~93GB of weights from disk into GPU/CPU memory
+  # is not instant - if you see "RemoteProtocolError: peer closed
+  # connection ... setup failed" again, it may still be Replicate/Cog's
+  # default 10-minute setup() timeout. COG_SETUP_TIMEOUT is a RUNTIME env
+  # var (not settable in cog.yaml) - set it in the Replicate dashboard
+  # under deployment environment variables if needed, e.g. 10800 (3 hours).
   system_packages:
     - "git"
     - "cmake"
@@ -13,8 +22,8 @@ build:
     - "curl"
     - "libcurl4-openssl-dev"
   python_packages:
-    - "huggingface_hub[cli]"
-    - "requests"
+    - "huggingface_hub[cli]==0.25.2"
+    - "requests==2.32.3"
   run:
     # Unsloth's glm5next-support fork of llama.cpp — mainline has no glm5_next
     # architecture support yet (as of 2026-08-26, PRs #27752/#27754 unmerged).
@@ -46,6 +55,14 @@ build:
     # Free the intermediate object files / CUDA fatbins now that the
     # binaries are built and copied out - these are what ate the disk.
     - "rm -rf /src/llama.cpp/build/CMakeFiles /src/llama.cpp/.git"
+    # Bake the 1-bit dynamic quant (UD-TQ1_0, ~93GB) into the image itself.
+    # NOTE: ~71% top-1 accuracy retained vs BF16 per Unsloth's own numbers -
+    # a real, noticeable quality drop from the 3-bit version (~82%), traded
+    # for smaller image size and no per-cold-start download.
+    - >
+      python3 -m pip install --no-cache-dir "huggingface_hub[cli]==0.25.2"
+      && hf download unsloth/GLM-5.3-Flash-GGUF
+      --local-dir /src/model
+      --include "*UD-TQ1_0*"
 
 predict: "predict.py:Predictor"
-
