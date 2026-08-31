@@ -1,0 +1,36 @@
+build:
+  gpu: true
+  cuda: "12.4"
+  python_version: "3.11"
+  system_packages:
+    - "git"
+    - "cmake"
+    - "build-essential"
+    - "pciutils"
+    - "curl"
+    - "libcurl4-openssl-dev"
+  python_packages:
+    - "huggingface_hub[cli]"
+    - "requests"
+  run:
+    # Unsloth's glm5next-support fork of llama.cpp — mainline has no glm5_next
+    # architecture support yet (as of 2026-08-26, PRs #27752/#27754 unmerged).
+    # NOTE: the model weights (~120GB, UD-IQ3_XXS) are deliberately NOT
+    # downloaded here at build time — they're pulled inside setup() instead,
+    # so the local `cog build`/`cog push` on your machine stays lightweight
+    # (just the llama.cpp compile, no 120GB disk requirement locally).
+    # Tradeoff: every cold start on Replicate re-downloads ~120GB, adding
+    # several minutes to cold boot. This download time should fall under
+    # Replicate's free "setup" phase for public models (not billed), but
+    # confirm this in your dashboard after a real run.
+    - "git clone --branch glm5next/upstream https://github.com/unslothai/llama.cpp /src/llama.cpp"
+    - >
+      cmake /src/llama.cpp -B /src/llama.cpp/build
+      -DBUILD_SHARED_LIBS=OFF -DGGML_CUDA=ON
+    - >
+      cmake --build /src/llama.cpp/build --config Release -j
+      --target llama-cli llama-mtmd-cli llama-server llama-gguf-split
+    - "mkdir -p /src/bin && cp /src/llama.cpp/build/bin/llama-* /src/bin/"
+
+predict: "predict.py:Predictor"
+
