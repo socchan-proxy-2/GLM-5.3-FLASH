@@ -16,6 +16,7 @@ build:
     - "pciutils"
   python_packages:
     - "huggingface_hub==0.25.2"
+    - "hf_transfer==0.1.8"
   run:
     # Use Unsloth's prebuilt llama.cpp binaries instead of compiling from
     # source - this specific release (b10715-mix-86bd2d3) has GLM-5-Next
@@ -39,9 +40,15 @@ build:
     # testing - the 1-bit tier may simply not work well for glm5next
     # regardless of variant. Watch output quality closely and be ready to
     # fall back to 3-bit (UD-IQ3_XXS, ~120GB) if so.
+    # IMPORTANT: allow_patterns=['*UD-IQ1_M*'] is too broad - it also matches
+    # a stray duplicate shard under a "Shard_Rewrite/" directory in this
+    # repo (confirmed via `hf repo files`), which caused the first-shard
+    # detection to potentially pick the wrong (possibly incomplete/patch)
+    # copy, leading to a hang with no clear error at load time.
+    # Anchor the pattern to the actual "UD-IQ1_M/" directory only.
     - >
-      python3 -c "from huggingface_hub import snapshot_download;
+      HF_HUB_ENABLE_HF_TRANSFER=1 python3 -c "from huggingface_hub import snapshot_download;
       snapshot_download(repo_id='unsloth/GLM-5.3-Flash-GGUF',
-      local_dir='/src/model', allow_patterns=['*UD-IQ1_M*'])"
+      local_dir='/src/model', allow_patterns=['UD-IQ1_M/*'])"
 
 predict: "predict.py:Predictor"
